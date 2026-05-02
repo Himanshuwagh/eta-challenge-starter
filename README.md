@@ -107,5 +107,15 @@ python train_v5_stack.py
 python grade.py
 ```
 
+### ⚡ Performance Optimization (Google Colab)
+
+The `train_v5_stack.py` script is optimized to utilize high-memory and GPU-enabled environments like Google Colab:
+- **GPU Acceleration:** Automatically detects and uses NVIDIA GPUs for all three GBDT models (`cuda`, `gpu_hist`, `task_type=GPU`).
+- **Resource Management:** Configured to use all available CPU cores when GPU is absent.
+- **Memory Efficiency:** Uses `float32` precision to minimize RAM footprint while allowing for larger `ETA_SAMPLE_FRAC`.
+- **Fast Inference:** The `predict.py` module is optimized for low-latency scoring by caching pre-computed aggregates.
+
+To maximize speed in Colab, ensure you select a **GPU runtime** (T4, A100, or V100) and set `ETA_SAMPLE_FRAC=1.0` to utilize the full RAM.
+
 ---
 *Total time spent: ~8 hours*
