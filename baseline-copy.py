@@ -396,23 +396,36 @@ def main() -> None:
     print(f"\nFeature count: {X_train.shape[1]}")
     print(f"Features: {list(X_train.columns)}")
 
-    print("\nTraining XGBoost (objective tuned for MAE)...")
-    model = xgb.XGBRegressor(
-        n_estimators=3000,
-        max_depth=10,
-        learning_rate=0.03,
-        min_child_weight=5,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        reg_lambda=1.5,
-        reg_alpha=0.1,
-        gamma=0.1,
-        tree_method="hist",
-        n_jobs=-1,
-        random_state=42,
-        objective="reg:absoluteerror",
-        early_stopping_rounds=100,
-    )
+    def check_gpu():
+        try:
+            xgb.XGBRegressor(tree_method='gpu_hist').get_booster()
+            return True
+        except:
+            return False
+
+    use_gpu = check_gpu()
+    print(f"\nTraining XGBoost (objective tuned for MAE) using {'GPU' if use_gpu else 'CPU'}...")
+    
+    xgb_params = {
+        "n_estimators": 3000,
+        "max_depth": 10,
+        "learning_rate": 0.03,
+        "min_child_weight": 5,
+        "subsample": 0.8,
+        "colsample_bytree": 0.8,
+        "reg_lambda": 1.5,
+        "reg_alpha": 0.1,
+        "gamma": 0.1,
+        "random_state": 42,
+        "objective": "reg:absoluteerror",
+        "early_stopping_rounds": 100,
+    }
+    if use_gpu:
+        xgb_params.update({"tree_method": "gpu_hist", "predictor": "gpu_predictor"})
+    else:
+        xgb_params.update({"tree_method": "hist", "n_jobs": -1})
+
+    model = xgb.XGBRegressor(**xgb_params)
     t1 = time.time()
     model.fit(
         X_train,
