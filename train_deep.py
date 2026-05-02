@@ -273,9 +273,9 @@ def train_nn(cats_tr, conts_tr, y_tr, cats_dev, conts_dev, y_dev,
     y_dev_t = torch.tensor(y_dev, dtype=torch.float32).to(DEVICE)
 
     ds = TensorDataset(cats_tr_t, conts_tr_t, y_tr_t)
-    nw = min(os.cpu_count() or 1, 8)  # parallel workers
+    # Using num_workers > 0 in Colab frequently causes silent hangs due to shared memory (/dev/shm) exhaustion
     loader = DataLoader(ds, batch_size=batch_size, shuffle=True, 
-                        num_workers=nw, pin_memory=(DEVICE == "cuda"))
+                        num_workers=0, pin_memory=(DEVICE == "cuda"))
 
     best_mae, best_state, patience_count = float("inf"), None, 0
     patience = 7
