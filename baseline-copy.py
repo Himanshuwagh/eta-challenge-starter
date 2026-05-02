@@ -46,7 +46,30 @@ FEATURE_ORDER = [
     "pair_prior_sec",
     "log1p_pair_count",
     "pickup_prior_sec",
+    "haversine_dist",
+    "manhattan_dist",
+    "bearing",
 ]
+
+def haversine_array(lat1, lng1, lat2, lng2):
+    lat1, lng1, lat2, lng2 = map(np.radians, (lat1, lng1, lat2, lng2))
+    lat = lat2 - lat1
+    lng = lng2 - lng1
+    d = np.sin(lat * 0.5) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(lng * 0.5) ** 2
+    h = 2 * 6371 * np.arcsin(np.sqrt(d)) # km
+    return h
+
+def manhattan_distance(lat1, lng1, lat2, lng2):
+    a = haversine_array(lat1, lng1, lat1, lng2)
+    b = haversine_array(lat1, lng1, lat2, lng1)
+    return a + b
+
+def bearing_array(lat1, lng1, lat2, lng2):
+    lng_delta_rad = np.radians(lng2 - lng1)
+    lat1, lng1, lat2, lng2 = map(np.radians, (lat1, lng1, lat2, lng2))
+    y = np.sin(lng_delta_rad) * np.cos(lat2)
+    x = np.cos(lat1) * np.sin(lat2) - np.sin(lat1) * np.cos(lat2) * np.cos(lng_delta_rad)
+    return np.degrees(np.arctan2(y, x))
 
 
 def build_aggregate_arrays(train: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
@@ -79,6 +102,8 @@ def engineer_features(
     pair_median: np.ndarray,
     pair_cnt: np.ndarray,
     pickup_median: np.ndarray,
+    zone_lat: np.ndarray,
+    zone_lon: np.ndarray,
 ) -> pd.DataFrame:
     ts = pd.to_datetime(df["requested_at"])
     hour = ts.dt.hour.astype(np.int32)
@@ -95,6 +120,15 @@ def engineer_features(
     pair_prior = np.where(has_pair, np.nan_to_num(pm, nan=pup), pup).astype(np.float64)
     log1p_pc = np.where(has_pair, np.log1p(pc.astype(np.float64)), 0.0)
 
+    pu_lat = zone_lat[pu]
+    pu_lon = zone_lon[pu]
+    do_lat = zone_lat[do]
+    do_lon = zone_lon[do]
+
+    h_dist = haversine_array(pu_lat, pu_lon, do_lat, do_lon)
+    m_dist = manhattan_distance(pu_lat, pu_lon, do_lat, do_lon)
+    bearing = bearing_array(pu_lat, pu_lon, do_lat, do_lon)
+
     out = pd.DataFrame(
         {
             "pickup_zone": pu,
@@ -109,6 +143,9 @@ def engineer_features(
             "pair_prior_sec": pair_prior,
             "log1p_pair_count": log1p_pc,
             "pickup_prior_sec": pickup_median[pu].astype(np.float64),
+            "haversine_dist": h_dist,
+            "manhattan_dist": m_dist,
+            "bearing": bearing,
         }
     )
     return out[FEATURE_ORDER]
@@ -133,15 +170,25 @@ def main() -> None:
     print(f"  train: {len(train):,} rows")
     print(f"  dev:   {len(dev):,} rows")
 
+    print("Loading zone coordinates...")
+    coords_df = pd.read_csv(DATA_DIR / "zone_coords.csv")
+    zone_lat = np.full(_MAX_ZONE, np.nan, dtype=np.float32)
+    zone_lon = np.full(_MAX_ZONE, np.nan, dtype=np.float32)
+    ids = coords_df["zone_id"].astype(np.int32).to_numpy()
+    mask = ids < _MAX_ZONE
+    ids = ids[mask]
+    zone_lat[ids] = coords_df["latitude"].to_numpy(dtype=np.float32)[mask]
+    zone_lon[ids] = coords_df["longitude"].to_numpy(dtype=np.float32)[mask]
+
     print("Computing OD / pickup aggregates from train...")
     t0 = time.time()
     pair_median, pair_cnt, pickup_median, global_med = build_aggregate_arrays(train)
     print(f"  done in {time.time() - t0:.1f}s")
 
     print("Building feature matrices...")
-    X_train = engineer_features(train, pair_median, pair_cnt, pickup_median)
+    X_train = engineer_features(train, pair_median, pair_cnt, pickup_median, zone_lat, zone_lon)
     y_train = train["duration_seconds"].to_numpy(dtype=np.float64)
-    X_dev = engineer_features(dev, pair_median, pair_cnt, pickup_median)
+    X_dev = engineer_features(dev, pair_median, pair_cnt, pickup_median, zone_lat, zone_lon)
     y_dev = dev["duration_seconds"].to_numpy(dtype=np.float64)
 
     print("\nTraining XGBoost (objective tuned for MAE)...")
@@ -183,6 +230,8 @@ def main() -> None:
         "pickup_median": pickup_median,
         "global_median": global_med,
         "feature_order": FEATURE_ORDER,
+        "zone_lat": zone_lat,
+        "zone_lon": zone_lon,
     }
     with open(MODEL_PATH, "wb") as f:
         pickle.dump(bundle, f)

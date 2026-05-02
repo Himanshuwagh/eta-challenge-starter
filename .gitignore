@@ -16,3 +16,7 @@ data/sample_1M.parquet
 model.pkl
 model_copy.pkl
 model_baseline.pkl
+
+# Shapefile data
+data/taxi_zones.zip
+data/taxi_zones/

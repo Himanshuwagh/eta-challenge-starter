@@ -23,6 +23,25 @@ if isinstance(_RAW, dict) and _RAW.get("version") == 2:
     _PAIR_MED = _RAW["pair_median"]
     _PAIR_CNT = _RAW["pair_cnt"]
     _PICKUP_MED = _RAW["pickup_median"]
+    _ZONE_LAT = _RAW.get("zone_lat")
+    _ZONE_LON = _RAW.get("zone_lon")
+
+    def haversine_scalar(lat1, lng1, lat2, lng2):
+        lat1, lng1, lat2, lng2 = map(np.radians, (lat1, lng1, lat2, lng2))
+        lat = lat2 - lat1
+        lng = lng2 - lng1
+        d = np.sin(lat * 0.5) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(lng * 0.5) ** 2
+        return 2 * 6371 * np.arcsin(np.sqrt(d))
+
+    def manhattan_scalar(lat1, lng1, lat2, lng2):
+        return haversine_scalar(lat1, lng1, lat1, lng2) + haversine_scalar(lat1, lng1, lat2, lng1)
+
+    def bearing_scalar(lat1, lng1, lat2, lng2):
+        lng_delta_rad = np.radians(lng2 - lng1)
+        lat1, lng1, lat2, lng2 = map(np.radians, (lat1, lng1, lat2, lng2))
+        y = np.sin(lng_delta_rad) * np.cos(lat2)
+        x = np.cos(lat1) * np.sin(lat2) - np.sin(lat1) * np.cos(lat2) * np.cos(lng_delta_rad)
+        return np.degrees(np.arctan2(y, x))
 
     if hasattr(_MODEL, "get_booster"):
         _MODEL.get_booster().feature_names = None
@@ -47,6 +66,15 @@ if isinstance(_RAW, dict) and _RAW.get("version") == 2:
             pair_prior = pup
             log1p_pc = 0.0
 
+        if _ZONE_LAT is not None and _ZONE_LON is not None:
+            pu_lat, pu_lon = float(_ZONE_LAT[pu]), float(_ZONE_LON[pu])
+            do_lat, do_lon = float(_ZONE_LAT[do]), float(_ZONE_LON[do])
+            h_dist = haversine_scalar(pu_lat, pu_lon, do_lat, do_lon)
+            m_dist = manhattan_scalar(pu_lat, pu_lon, do_lat, do_lon)
+            bearing = bearing_scalar(pu_lat, pu_lon, do_lat, do_lon)
+        else:
+            h_dist, m_dist, bearing = 0.0, 0.0, 0.0
+
         x = np.array(
             [[
                 pu,
@@ -61,6 +89,9 @@ if isinstance(_RAW, dict) and _RAW.get("version") == 2:
                 pair_prior,
                 log1p_pc,
                 pup,
+                h_dist,
+                m_dist,
+                bearing,
             ]],
             dtype=np.float32,
         )
