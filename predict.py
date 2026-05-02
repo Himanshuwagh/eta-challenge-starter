@@ -77,6 +77,8 @@ if isinstance(_RAW, dict) and _RAW.get("version") == 5:
     _ZONE_LAT = _RAW["zone_lat"]
     _ZONE_LON = _RAW["zone_lon"]
     _SMOOTHING_W = 50
+    _FEAT_NAMES = _RAW.get("feature_names", [])
+    _CAT_COLS = [_FEAT_NAMES[i] for i in _RAW.get("cat_features", [])] if _FEAT_NAMES else []
 
     if hasattr(_XGB, "get_booster"):
         _XGB.get_booster().feature_names = None
@@ -154,7 +156,12 @@ if isinstance(_RAW, dict) and _RAW.get("version") == 5:
 
         p1 = float(_XGB.predict(x)[0])
         p2 = float(_LGB.predict(x)[0])
-        p3 = float(_CAT.predict(x)[0])
+        # CatBoost needs DataFrame with int cat columns
+        import pandas as _pd
+        x_df = _pd.DataFrame(x, columns=_FEAT_NAMES)
+        for _c in _CAT_COLS:
+            x_df[_c] = x_df[_c].astype(int)
+        p3 = float(_CAT.predict(x_df)[0])
         return float(_W[0]*p1 + _W[1]*p2 + _W[2]*p3)
 
 # --- Bundle from `train_deep.py` (version 4: NN + XGBoost Ensemble) ----------

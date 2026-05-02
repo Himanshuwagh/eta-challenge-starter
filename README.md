@@ -11,7 +11,7 @@
 | v1 (Baseline) | XGBoost, 6 raw features | ~351.0s |
 | v3 | XGBoost, 31 engineered features | 260.5s |
 | v4 | Entity Embedding NN + XGBoost Ensemble | ~250s |
-| **v5** | **XGBoost + LightGBM + CatBoost Stacking** | **Training...** |
+| **v5** | **XGBoost + LightGBM + CatBoost Stacking** | **~262.4s** |
 
 ---
 

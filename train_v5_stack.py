@@ -339,10 +339,11 @@ def main():
         X_tr_df[c] = X_tr_df[c].astype(int)
         X_dev_df[c] = X_dev_df[c].astype(int)
     cat_model = CatBoostRegressor(
-        iterations=4000, depth=10, learning_rate=0.03,
+        iterations=2000, depth=6, learning_rate=0.08,
         l2_leaf_reg=3.0, random_seed=44,
-        loss_function="Huber:delta=500",
-        early_stopping_rounds=100, verbose=200,
+        loss_function="MAE",
+        eval_metric="MAE",
+        early_stopping_rounds=80, verbose=200,
         cat_features=cat_cols,
         thread_count=-1,
     )
