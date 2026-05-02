@@ -102,14 +102,23 @@ if isinstance(_RAW, dict) and _RAW.get("version") == 6:
         has = pc > 0 and not np.isnan(pm)
         pair_prior = pm if has else pup
         pair_smoothed = (pc*pm + _SMOOTHING_W*pup)/(pc+_SMOOTHING_W) if has else pup
-        hbin = hour // 3
+        hbin = hour  # Changed to 1-hour bin (v6)
         phm = float(_PAIR_HOUR_MED[pu, do, hbin])
         pair_hour_prior = phm if not np.isnan(phm) else pair_prior
 
         pu_lat, pu_lon = float(_ZONE_LAT[pu]), float(_ZONE_LON[pu])
         do_lat, do_lon = float(_ZONE_LAT[do]), float(_ZONE_LON[do])
         h_dist = _haversine(pu_lat, pu_lon, do_lat, do_lon)
-        m_dist = h_dist * 1.2 # Manhattan approx
+        
+        # NYC rotated grid Manhattan distance
+        theta = np.radians(29.0)
+        c, s = np.cos(theta), np.sin(theta)
+        r_lat1 = pu_lat * c - pu_lon * s
+        r_lng1 = pu_lat * s + pu_lon * c
+        r_lat2 = do_lat * c - do_lon * s
+        r_lng2 = do_lat * s + do_lon * c
+        m_dist = np.abs(r_lat2 - r_lat1) * 111.1 + np.abs(r_lng2 - r_lng1) * 111.1 * np.cos(np.radians((pu_lat + do_lat) / 2.0))
+        
         bear = _bearing(pu_lat, pu_lon, do_lat, do_lon)
 
         pu_bor, do_bor = _BOR.get(pu, 6), _BOR.get(do, 6)

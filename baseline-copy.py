@@ -95,9 +95,24 @@ def haversine_array(lat1, lng1, lat2, lng2):
     return h
 
 def manhattan_distance(lat1, lng1, lat2, lng2):
-    a = haversine_array(lat1, lng1, lat1, lng2)
-    b = haversine_array(lat1, lng1, lat2, lng1)
-    return a + b
+    # NYC grid is rotated ~29 degrees clockwise from true North
+    # We rotate the coordinates counter-clockwise by 29 degrees to align the grid with N/S E/W
+    theta = np.radians(29.0)
+    c, s = np.cos(theta), np.sin(theta)
+    
+    # Rotate coordinates
+    r_lat1 = lat1 * c - lng1 * s
+    r_lng1 = lat1 * s + lng1 * c
+    r_lat2 = lat2 * c - lng2 * s
+    r_lng2 = lat2 * s + lng2 * c
+    
+    # Approximate Manhattan distance on the rotated grid
+    # 1 degree lat ~ 111.1 km. 1 degree lon ~ 111.1 * cos(lat) km
+    lat_dist = np.abs(r_lat2 - r_lat1) * 111.1
+    avg_lat = np.radians((lat1 + lat2) / 2.0)
+    lng_dist = np.abs(r_lng2 - r_lng1) * 111.1 * np.cos(avg_lat)
+    
+    return lat_dist + lng_dist
 
 def bearing_array(lat1, lng1, lat2, lng2):
     lng_delta_rad = np.radians(lng2 - lng1)
@@ -111,13 +126,25 @@ def bearing_array(lat1, lng1, lat2, lng2):
 
 def build_aggregate_arrays(train: pd.DataFrame):
     """Build all lookup arrays from training data only."""
-    global_med = float(train["duration_seconds"].median())
+    
+    # --- Clip outliers for aggregates ---
+    # Trips > 99th pct (~4000s) or < 60s skew the medians significantly for rare pairs.
+    # We clip the values temporarily just for the grouping operations.
+    clip_upper = float(train["duration_seconds"].quantile(0.99))
+    clip_lower = 60.0
+    clipped_duration = train["duration_seconds"].clip(clip_lower, clip_upper)
+    
+    # We create a temporary DataFrame for aggregation to avoid modifying the original 'train' DataFrame
+    agg_df = train[["pickup_zone", "dropoff_zone", "requested_at"]].copy()
+    agg_df["duration_seconds"] = clipped_duration
+
+    global_med = float(agg_df["duration_seconds"].median())
 
     # --- OD pair median / count ---
     pair_median = np.full((_MAX_ZONE, _MAX_ZONE), np.nan, dtype=np.float32)
     pair_cnt = np.zeros((_MAX_ZONE, _MAX_ZONE), dtype=np.int32)
 
-    grp = train.groupby(["pickup_zone", "dropoff_zone"], sort=False)["duration_seconds"]
+    grp = agg_df.groupby(["pickup_zone", "dropoff_zone"], sort=False)["duration_seconds"]
     cnt = grp.size()
     med = grp.median()
     pu_idx = cnt.index.get_level_values(0).astype(np.int32).to_numpy()
@@ -127,24 +154,25 @@ def build_aggregate_arrays(train: pd.DataFrame):
 
     # --- Pickup zone median ---
     pickup_median = np.full(_MAX_ZONE, np.nan, dtype=np.float32)
-    ps = train.groupby("pickup_zone")["duration_seconds"].median()
+    ps = agg_df.groupby("pickup_zone")["duration_seconds"].median()
     ids = ps.index.astype(np.int32).to_numpy()
     pickup_median[ids] = ps.to_numpy().astype(np.float32)
     pickup_median = np.where(np.isnan(pickup_median), global_med, pickup_median).astype(np.float32)
 
     # --- Dropoff zone median ---
     dropoff_median = np.full(_MAX_ZONE, np.nan, dtype=np.float32)
-    ds = train.groupby("dropoff_zone")["duration_seconds"].median()
+    ds = agg_df.groupby("dropoff_zone")["duration_seconds"].median()
     ids_d = ds.index.astype(np.int32).to_numpy()
     dropoff_median[ids_d] = ds.to_numpy().astype(np.float32)
     dropoff_median = np.where(np.isnan(dropoff_median), global_med, dropoff_median).astype(np.float32)
 
-    # --- Time-conditioned pair prior: median per (PU, DO, 3-hour block) ---
-    # 8 bins: 0-2, 3-5, ..., 21-23
-    ts = pd.to_datetime(train["requested_at"])
-    train_temp = train.assign(hour_bin=(ts.dt.hour // 3).astype(np.int8))
-    pair_hour_median = np.full((_MAX_ZONE, _MAX_ZONE, 8), np.nan, dtype=np.float32)
-    grp_h = train_temp.groupby(["pickup_zone", "dropoff_zone", "hour_bin"], sort=False)["duration_seconds"]
+    # --- Time-conditioned pair prior: median per (PU, DO, 1-hour block) ---
+    # 24 bins: 0, 1, 2, ..., 23
+    ts = pd.to_datetime(agg_df["requested_at"])
+    agg_df["hour_bin"] = ts.dt.hour.astype(np.int8)
+    
+    pair_hour_median = np.full((_MAX_ZONE, _MAX_ZONE, 24), np.nan, dtype=np.float32)
+    grp_h = agg_df.groupby(["pickup_zone", "dropoff_zone", "hour_bin"], sort=False)["duration_seconds"]
     med_h = grp_h.median()
     ph_pu = med_h.index.get_level_values(0).astype(np.int32).to_numpy()
     ph_do = med_h.index.get_level_values(1).astype(np.int32).to_numpy()
@@ -217,7 +245,7 @@ def engineer_features(
     ).astype(np.float64)
 
     # --- Time-conditioned pair prior ---
-    hour_bin = (hour_np // 3).astype(np.int32)
+    hour_bin = hour_np.astype(np.int32)
     phm = pair_hour_median[pu, do, hour_bin]
     # Fall back to overall pair median, then pickup median
     pair_hour_prior = np.where(
