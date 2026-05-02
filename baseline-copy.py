@@ -9,12 +9,16 @@ Prerequisites:
 Run:
     python baseline-copy.py
 
+Fast iteration (subset rows, custom artifact path):
+    ETA_SAMPLE_FRAC=0.05 ETA_MODEL_PATH=model_copy.pkl python baseline-copy.py
+
 Baseline (~6 features) is ~351s Dev MAE; this script typically improves materially by
 adding pair-level duration priors and richer time encoding.
 """
 
 from __future__ import annotations
 
+import os
 import pickle
 import time
 from pathlib import Path
@@ -24,7 +28,7 @@ import pandas as pd
 import xgboost as xgb
 
 DATA_DIR = Path(__file__).parent / "data"
-MODEL_PATH = Path(__file__).parent / "model.pkl"
+MODEL_PATH = Path(os.environ.get("ETA_MODEL_PATH", Path(__file__).parent / "model.pkl"))
 
 # Zones are 1–265; index 0 unused for cleaner direct indexing.
 _MAX_ZONE = 266
@@ -120,6 +124,12 @@ def main() -> None:
     print("Loading data...")
     train = pd.read_parquet(train_path)
     dev = pd.read_parquet(dev_path)
+    frac = os.environ.get("ETA_SAMPLE_FRAC")
+    if frac:
+        f = float(frac)
+        train = train.sample(frac=f, random_state=42)
+        dev = dev.sample(frac=f, random_state=43)
+        print(f"  ETA_SAMPLE_FRAC={f} (subsampled for fast iteration)")
     print(f"  train: {len(train):,} rows")
     print(f"  dev:   {len(dev):,} rows")
 
