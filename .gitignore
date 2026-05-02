@@ -13,9 +13,9 @@ data/sample_1M.parquet
 # Docker cache
 .docker_cache/
 
-model.pkl
-model_copy.pkl
-model_baseline.pkl
+# model.pkl
+# model_copy.pkl
+# model_baseline.pkl
 
 # Shapefile data
 data/taxi_zones.zip
