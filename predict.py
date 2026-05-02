@@ -130,28 +130,26 @@ if isinstance(_RAW, dict) and _RAW.get("version") == 6:
         is_er = 1.0 if dow<5 and 16<=hour<=19 else 0.0
         speed = h_dist / (pair_prior/3600.0 + 1e-6) if pair_prior > 0 else 0.0
 
-        import pandas as _pd
-        x = _pd.DataFrame([{
-            "pickup_zone": pu, "dropoff_zone": do, "hour": hour, "dow": dow, "month": month,
-            "passenger_count": pax, "is_weekend": 1.0 if dow>=5 else 0.0,
-            "hour_sin": np.sin(2*np.pi*hour/24.0), "hour_cos": np.cos(2*np.pi*hour/24.0),
-            "dow_sin": np.sin(2*np.pi*dow/7.0), "dow_cos": np.cos(2*np.pi*dow/7.0),
-            "pair_prior_sec": pair_prior, "pair_prior_smoothed": pair_smoothed,
-            "log1p_pair_count": np.log1p(pc) if has else 0.0,
-            "pickup_prior_sec": pup, "dropoff_prior_sec": dop,
-            "pair_hour_prior_sec": pair_hour_prior,
-            "haversine_dist": h_dist, "manhattan_dist": m_dist, "bearing": bear,
-            "is_holiday": is_hol, "is_holiday_period": is_hol_p,
-            "day_of_year": doy, "minute_of_day": mod,
-            "is_morning_rush": is_mr, "is_evening_rush": is_er,
-            "pu_bor": float(pu_bor), "do_bor": float(do_bor), "is_cross_borough": 1.0 if pu_bor!=do_bor else 0.0,
-            "is_airport": 1.0 if pu in (1,132,138) or do in (1,132,138) else 0.0,
-            "days_to_christmas": float(days_xmas), "days_to_newyear": float(days_ny),
-            "speed_proxy": float(speed),
-            "temp_c": 15.0, "precip_mm": 0.0, "wind_speed_kmh": 10.0, "visibility_km": 16.0, "is_raining": 0.0,
-            "rain_x_airport": 0.0, "rain_x_dist": 0.0,
-        }])
-        return float(_MODEL.predict(x[_FEAT_ORDER])[0])
+        x = np.array([[
+            pu, do, hour, dow, month, pax, 
+            1.0 if dow>=5 else 0.0,
+            np.sin(2*np.pi*hour/24.0), np.cos(2*np.pi*hour/24.0),
+            np.sin(2*np.pi*dow/7.0), np.cos(2*np.pi*dow/7.0),
+            pair_prior, pair_smoothed, 
+            np.log1p(pc) if has else 0.0,
+            pup, dop, pair_hour_prior,
+            h_dist, m_dist, bear,
+            is_hol, is_hol_p, doy, mod,
+            is_mr, is_er,
+            float(pu_bor), float(do_bor), 1.0 if pu_bor!=do_bor else 0.0,
+            1.0 if pu in (1,132,138) or do in (1,132,138) else 0.0,
+            float(days_xmas), float(days_ny),
+            float(speed),
+            15.0, 0.0, 10.0, 16.0, 0.0, 0.0, 0.0
+        ]], dtype=np.float32)
+        
+        # XGBoost predicts directly on 2D numpy arrays
+        return float(_MODEL.predict(x)[0])
 
 # --- Bundle from `train_v5_stack.py` (version 5: XGB+LGB+CAT Stack) ----------
 elif isinstance(_RAW, dict) and _RAW.get("version") == 5:
