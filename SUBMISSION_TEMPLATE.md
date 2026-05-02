@@ -28,9 +28,9 @@ The tooling fell short in handling extremely long-running terminal commands, whi
 
 ## Next experiments
 
-1.  **LightGBM/CatBoost Ensemble:** Blending multiple GBDT models to capture different splitting patterns and native categorical optimizations.
-2.  **Entity Embeddings:** Training a neural network to learn latent representations of zones to capture neighborhood "personality" beyond just physical distance.
-3.  **Residual Post-Processing:** Implementing a "correction" layer that predicts the error of the current model based on live driver telemetry (if available).
+1.  **Residual Post-Processing:** Implementing a "correction" layer that predicts the error of the current model based on live driver telemetry (if available).
+2.  **FT-Transformer:** Moving beyond simple MLPs to state-of-the-art tabular transformers to better capture high-cardinality feature interactions.
+3.  **Graph Neural Networks:** Treating the NYC zone network as a graph to learn spatial dependencies directly from the topology.
 
 ## How to reproduce
 
