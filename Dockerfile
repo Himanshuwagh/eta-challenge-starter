@@ -25,6 +25,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # is the smoke test; it runs inside the sandboxed grader container.
 COPY predict.py grade.py ./
 COPY model.pkl ./
+COPY data/zone_lookup.csv ./data/
 
 # Grader invokes:  python grade.py <input.parquet> <output.csv>
 ENTRYPOINT ["python", "grade.py"]
