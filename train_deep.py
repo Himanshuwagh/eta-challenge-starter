@@ -264,19 +264,18 @@ def train_nn(cats_tr, conts_tr, y_tr, cats_dev, conts_dev, y_dev,
         optimizer, mode="min", factor=0.5, patience=3, min_lr=1e-5
     )
 
-    # Tensors
-    def to_tensor(arr, dtype=torch.float32):
-        return torch.tensor(arr, dtype=dtype).to(DEVICE)
-
-    cats_tr_t = to_tensor(cats_tr, torch.long)
-    conts_tr_t = to_tensor(conts_tr)
-    y_tr_t = to_tensor(y_tr)
-    cats_dev_t = to_tensor(cats_dev, torch.long)
-    conts_dev_t = to_tensor(conts_dev)
-    y_dev_t = to_tensor(y_dev)
+    # Keep data on CPU initially to avoid massive VRAM consumption for large datasets
+    cats_tr_t = torch.tensor(cats_tr, dtype=torch.long)
+    conts_tr_t = torch.tensor(conts_tr, dtype=torch.float32)
+    y_tr_t = torch.tensor(y_tr, dtype=torch.float32)
+    cats_dev_t = torch.tensor(cats_dev, dtype=torch.long).to(DEVICE)
+    conts_dev_t = torch.tensor(conts_dev, dtype=torch.float32).to(DEVICE)
+    y_dev_t = torch.tensor(y_dev, dtype=torch.float32).to(DEVICE)
 
     ds = TensorDataset(cats_tr_t, conts_tr_t, y_tr_t)
-    loader = DataLoader(ds, batch_size=batch_size, shuffle=True, num_workers=0, pin_memory=False)
+    nw = min(os.cpu_count() or 1, 8)  # parallel workers
+    loader = DataLoader(ds, batch_size=batch_size, shuffle=True, 
+                        num_workers=nw, pin_memory=(DEVICE == "cuda"))
 
     best_mae, best_state, patience_count = float("inf"), None, 0
     patience = 7
@@ -285,6 +284,8 @@ def train_nn(cats_tr, conts_tr, y_tr, cats_dev, conts_dev, y_dev,
         model.train()
         total_loss = 0
         for bc, bx, by in loader:
+            # Move batches to GPU dynamically
+            bc, bx, by = bc.to(DEVICE), bx.to(DEVICE), by.to(DEVICE)
             optimizer.zero_grad()
             pred = model(bc, bx)
             loss = torch.mean(torch.abs(pred - by))  # MAE loss
@@ -343,22 +344,30 @@ def build_xgb_features(cats, conts, pu_emb, do_emb):
 
 
 def train_xgb(X_tr, y_tr, X_dev, y_dev):
-    model = xgb.XGBRegressor(
-        n_estimators=3000,
-        max_depth=10,
-        learning_rate=0.03,
-        min_child_weight=5,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        reg_lambda=1.5,
-        reg_alpha=0.1,
-        gamma=0.1,
-        tree_method="hist",
-        n_jobs=-1,
-        random_state=42,
-        objective="reg:absoluteerror",
-        early_stopping_rounds=100,
-    )
+    xgb_params = {
+        "n_estimators": 3000,
+        "max_depth": 10,
+        "learning_rate": 0.03,
+        "min_child_weight": 5,
+        "subsample": 0.8,
+        "colsample_bytree": 0.8,
+        "reg_lambda": 1.5,
+        "reg_alpha": 0.1,
+        "gamma": 0.1,
+        "random_state": 42,
+        "objective": "reg:absoluteerror",
+        "early_stopping_rounds": 100,
+    }
+    
+    # Enable GPU if DEVICE is cuda
+    if DEVICE == "cuda":
+        xgb_params.update({"tree_method": "gpu_hist", "predictor": "gpu_predictor"})
+        print("  [XGB] Using GPU for training.")
+    else:
+        xgb_params.update({"tree_method": "hist", "n_jobs": -1})
+        print("  [XGB] Using CPU for training.")
+
+    model = xgb.XGBRegressor(**xgb_params)
     model.fit(X_tr, y_tr, eval_set=[(X_dev, y_dev)], verbose=False)
     preds = model.predict(X_dev)
     mae = float(np.mean(np.abs(preds - y_dev)))
