@@ -51,8 +51,105 @@ def _bearing(lat1, lng1, lat2, lng2):
     return np.degrees(np.arctan2(y, x))
 
 
+# --- Bundle from `train_deep.py` (version 4: NN + XGBoost Ensemble) ----------
+if isinstance(_RAW, dict) and _RAW.get("version") == 4:
+    import torch
+
+    _NN_MODEL = _RAW["nn_model"]
+    _NN_MODEL.eval()
+    _XGB_MODEL = _RAW["xgb_model"]
+    _W_XGB = _RAW["ensemble_weight_xgb"]
+    _PU_EMB = _RAW["pu_emb"]   # (266, 16)
+    _DO_EMB = _RAW["do_emb"]   # (266, 16)
+    _PAIR_MED = _RAW["pair_median"]
+    _PAIR_CNT = _RAW["pair_cnt"]
+    _PICKUP_MED = _RAW["pickup_median"]
+    _DROPOFF_MED = _RAW["dropoff_median"]
+    _PAIR_HOUR_MED = _RAW["pair_hour_median"]
+    _ZONE_LAT = _RAW["zone_lat"]
+    _ZONE_LON = _RAW["zone_lon"]
+    _SMOOTHING_W = 50
+
+    if hasattr(_XGB_MODEL, "get_booster"):
+        _XGB_MODEL.get_booster().feature_names = None
+
+    def predict(request: dict) -> float:
+        ts = datetime.fromisoformat(request["requested_at"])
+        pu = int(request["pickup_zone"])
+        do = int(request["dropoff_zone"])
+        hour = ts.hour
+        minute = ts.minute
+        dow = ts.weekday()
+        month = ts.month
+        day = ts.day
+        pax = int(request["passenger_count"])
+
+        # Pair priors
+        pm = float(_PAIR_MED[pu, do])
+        pc = int(_PAIR_CNT[pu, do])
+        pup = float(_PICKUP_MED[pu])
+        dop = float(_DROPOFF_MED[do])
+        has_pair = pc > 0 and not np.isnan(pm)
+        pair_prior = pm if has_pair else pup
+        pair_smoothed = (pc * pm + _SMOOTHING_W * pup) / (pc + _SMOOTHING_W) if has_pair else pup
+        log1p_pc = float(np.log1p(pc)) if has_pair else 0.0
+        hbin = hour // 3
+        phm = float(_PAIR_HOUR_MED[pu, do, hbin])
+        pair_hour_prior = phm if not np.isnan(phm) else pair_prior
+
+        # Spatial
+        pu_lat, pu_lon = float(_ZONE_LAT[pu]), float(_ZONE_LON[pu])
+        do_lat, do_lon = float(_ZONE_LAT[do]), float(_ZONE_LON[do])
+        h_dist = _haversine(pu_lat, pu_lon, do_lat, do_lon)
+        m_dist = _manhattan(pu_lat, pu_lon, do_lat, do_lon)
+        bear = _bearing(pu_lat, pu_lon, do_lat, do_lon)
+
+        # Holiday
+        is_hol = 1.0 if (month, day) in _HOLIDAYS else 0.0
+        is_xmas = 1.0 if ((month == 12 and day >= 22) or (month == 1 and day <= 2)) else 0.0
+        is_wd = dow < 5
+        is_mr = 1.0 if is_wd and 7 <= hour <= 10 else 0.0
+        is_er = 1.0 if is_wd and 16 <= hour <= 19 else 0.0
+        doy = float(ts.timetuple().tm_yday)
+        min_of_day = float(hour * 60 + minute)
+        two_pi_h = 2.0 * np.pi * hour / 24.0
+        two_pi_d = 2.0 * np.pi * dow / 7.0
+
+        # Weather defaults (neutral values at inference)
+        temp_c, precip, wind, vis, is_rain = 15.0, 0.0, 10.0, 16.0, 0.0
+
+        conts = np.array([[
+            pair_prior, pair_smoothed, log1p_pc,
+            pup, dop, pair_hour_prior,
+            h_dist, m_dist, bear,
+            is_hol, is_xmas, is_mr, is_er,
+            doy, min_of_day,
+            np.sin(two_pi_h), np.cos(two_pi_h),
+            np.sin(two_pi_d), np.cos(two_pi_d),
+            temp_c, precip, wind, vis, is_rain,
+            float(pax), 1.0 if dow >= 5 else 0.0, float(month),
+        ]], dtype=np.float32)
+
+        cats = np.array([[pu, do, hour, dow]], dtype=np.int32)
+
+        # NN prediction
+        with torch.no_grad():
+            cats_t = torch.tensor(cats, dtype=torch.long)
+            conts_t = torch.tensor(conts)
+            nn_pred = float(_NN_MODEL(cats_t, conts_t).item())
+
+        # XGBoost prediction (conts + zone embeddings)
+        pu_vec = _PU_EMB[pu]  # (16,)
+        do_vec = _DO_EMB[do]  # (16,)
+        x_xgb = np.hstack([conts[0], pu_vec, do_vec]).reshape(1, -1).astype(np.float64)
+        xgb_pred = float(_XGB_MODEL.predict(x_xgb)[0])
+
+        # Ensemble
+        return float(_W_XGB * xgb_pred + (1.0 - _W_XGB) * nn_pred)
+
 # --- Bundle from `baseline-copy.py` (version 3) --------------------------------
-if isinstance(_RAW, dict) and _RAW.get("version") == 3:
+elif isinstance(_RAW, dict) and _RAW.get("version") == 3:
+
     _MODEL = _RAW["xgb"]
     _PAIR_MED = _RAW["pair_median"]
     _PAIR_CNT = _RAW["pair_cnt"]
