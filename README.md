@@ -40,23 +40,18 @@ An attempt to ensemble XGBoost, LightGBM, and CatBoost with a Ridge meta-learner
 - **Observation:** Complex stacking yielded diminishing returns compared to the single-model `baseline-copy.py`. 
 - **Pivot:** Decided to fold v5's best feature engineering (boroughs, holiday proximity, speed proxy) back into the single-model XGBoost pipeline for a simpler, faster, and more maintainable production system.
 
-### Phase 5: Single-Model Refinement (Current)
-Refining `baseline-copy.py` with:
-- **v5 features:** Integrated cross-borough flags, airport logic, and holiday distance counters.
-- **Loss Function:** Switching between `reg:absoluteerror` (exact metric) and `reg:pseudohubererror` (outlier robustness).
-- **Target Encoding:** 1-hour bin resolution for time-conditioned priors.
+### Phase 5: Single-Model Refinement & Data Preprocessing (Current)
+Refining `baseline-copy.py` by folding in the best features from v5 and focusing heavily on **data preprocessing quality** rather than model complexity. We also optimized the scripts (`train_deep.py` and `baseline-copy.py`) for Colab's hardware constraints.
 
 | Innovation | Rationale |
 |-----------|-----------|
-| **XGBoost + LightGBM + CatBoost ensemble** | Different splitting strategies capture complementary patterns |
-| **Huber loss (δ=500)** | Robust to outliers, smoother than MAE for training |
-| **Borough features** | Cross-borough trips have fundamentally different dynamics |
-| **DOW-conditioned pair priors** | Day-specific historical medians per route |
-| **Holiday proximity features** | `days_to_christmas`, `days_to_newyear` — continuous distance |
-| **Speed proxy** | `haversine / pair_duration` captures congestion level |
-| **Weather interactions** | `rain × airport`, `rain × distance` |
-| **Outlier clipping for aggregates** | 99th percentile cap prevents skewed priors |
-| **Week-of-year encoding** | Captures seasonal patterns the model can extrapolate |
+| **Rotated Manhattan Distance** | The NYC street grid is rotated ~29° from true North. Standard Manhattan distance assumes an N/S grid. Rotating coordinates by 29° before calculation significantly improves correlation with actual driving paths. |
+| **Aggregate Target Clipping** | Extreme outliers (e.g., a trip taking 5 hours because the meter was left running) severely skew the `pair_median` prior. We now clip training durations to the 1st-99th percentile (60s to ~4000s) *before* computing historical aggregates. |
+| **High-Resolution Time Bins** | Increased the resolution of `pair_hour_median` from 3-hour chunks to 1-hour chunks to better capture the sharp spikes of morning/evening rush hour (especially potent when training on 100% data). |
+| **Colab GPU Acceleration** | Added automatic GPU detection to `baseline-copy.py` and the XGBoost phase of `train_deep.py` (`tree_method='gpu_hist'`), allowing fast training on 50M+ rows. |
+| **Colab DataLoader Deadlock Fix** | Fixed a silent hanging issue in `train_deep.py` caused by PyTorch's `DataLoader` exhausting Colab's `/dev/shm` shared memory when `num_workers > 0`. |
+| **Borough & Airport Features** | Cross-borough trips and airport trips (JFK/LGA/EWR) have fundamentally different traffic dynamics and volatility. |
+| **Holiday Proximity Features** | Replaced boolean holiday flags with continuous `days_to_christmas` and `days_to_newyear` metrics. |
 
 ---
 
