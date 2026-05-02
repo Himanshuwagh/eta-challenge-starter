@@ -34,13 +34,17 @@ Transformed zone IDs from arbitrary integers into a spatially-aware system:
 - Inspired by Uber's DeepETA architecture
 - Trained embeddings injected as features into XGBoost → weighted ensemble
 
-### Phase 4: Multi-GBDT Stacking (v5) ⬅️ Current
-Deep analysis revealed key bottlenecks:
-- **Dev set is 100% holiday period** (Dec 18-31) with zero matching training dates
-- **Within-pair variability** averaging 714.8s std — the theoretical floor for lookup approaches
-- **Airport zones** (JFK, LGA, EWR) have 800-1450s std
+### Phase 4: Multi-GBDT Stacking (v5)
+An attempt to ensemble XGBoost, LightGBM, and CatBoost with a Ridge meta-learner.
+- **Result:** XGB: 274.5s, LGB: 269.6s, CAT: 260.5s, Stack: 262.4s.
+- **Observation:** Complex stacking yielded diminishing returns compared to the single-model `baseline-copy.py`. 
+- **Pivot:** Decided to fold v5's best feature engineering (boroughs, holiday proximity, speed proxy) back into the single-model XGBoost pipeline for a simpler, faster, and more maintainable production system.
 
-**v5 Strategy — 3-model stacking with enhanced features:**
+### Phase 5: Single-Model Refinement (Current)
+Refining `baseline-copy.py` with:
+- **v5 features:** Integrated cross-borough flags, airport logic, and holiday distance counters.
+- **Loss Function:** Switching between `reg:absoluteerror` (exact metric) and `reg:pseudohubererror` (outlier robustness).
+- **Target Encoding:** 1-hour bin resolution for time-conditioned priors.
 
 | Innovation | Rationale |
 |-----------|-----------|

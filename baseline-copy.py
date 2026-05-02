@@ -61,38 +61,27 @@ def _is_holiday_period(month: np.ndarray, day: np.ndarray) -> np.ndarray:
 
 
 FEATURE_ORDER = [
-    "pickup_zone",
-    "dropoff_zone",
-    "hour",
-    "dow",
-    "month",
-    "passenger_count",
-    "is_weekend",
-    "hour_sin",
-    "hour_cos",
-    "dow_sin",
-    "dow_cos",
-    "pair_prior_sec",
-    "pair_prior_smoothed",
-    "log1p_pair_count",
-    "pickup_prior_sec",
-    "dropoff_prior_sec",
-    "pair_hour_prior_sec",
-    "haversine_dist",
-    "manhattan_dist",
-    "bearing",
-    "is_holiday",
-    "is_holiday_period",
-    "day_of_year",
-    "minute_of_day",
-    "is_morning_rush",
-    "is_evening_rush",
-    "temp_c",
-    "precip_mm",
-    "wind_speed_kmh",
-    "visibility_km",
-    "is_raining",
+    "pickup_zone", "dropoff_zone", "hour", "dow", "month", "passenger_count",
+    "is_weekend", "hour_sin", "hour_cos", "dow_sin", "dow_cos",
+    "pair_prior_sec", "pair_prior_smoothed", "log1p_pair_count",
+    "pickup_prior_sec", "dropoff_prior_sec", "pair_hour_prior_sec",
+    "haversine_dist", "manhattan_dist", "bearing",
+    "is_holiday", "is_holiday_period", "day_of_year", "minute_of_day",
+    "is_morning_rush", "is_evening_rush",
+    "pu_bor", "do_bor", "is_cross_borough", "is_airport",
+    "days_to_christmas", "days_to_newyear", "speed_proxy",
+    "temp_c", "precip_mm", "wind_speed_kmh", "visibility_km", "is_raining",
+    "rain_x_airport", "rain_x_dist",
 ]
+
+_BOROUGH_MAP = {}
+try:
+    _zl = pd.read_csv(DATA_DIR / "zone_lookup.csv")
+    for _, r in _zl.iterrows():
+        zid = int(r["LocationID"])
+        bor = str(r["Borough"]).strip()
+        _BOROUGH_MAP[zid] = {"Manhattan": 0, "Brooklyn": 1, "Queens": 2, "Bronx": 3, "Staten Island": 4, "EWR": 5}.get(bor, 6)
+except Exception: pass
 
 
 # ── Geometry helpers ─────────────────────────────────────────────────────────
@@ -258,6 +247,18 @@ def engineer_features(
 
     # --- Minute of day ---
     minute_of_day = (hour_np * 60 + minute_np).astype(np.int32)
+    # --- Borough & Airport ---
+    pu_bor = np.array([_BOROUGH_MAP.get(z, 6) for z in pu], dtype=np.int8)
+    do_bor = np.array([_BOROUGH_MAP.get(z, 6) for z in do], dtype=np.int8)
+    is_cross = (pu_bor != do_bor).astype(np.int8)
+    is_airport = (np.isin(pu, [1, 132, 138]) | np.isin(do, [1, 132, 138])).astype(np.int8)
+
+    # --- Holiday Proximity ---
+    days_to_xmas = np.where(month_np == 12, np.abs(day_np - 25), np.where(month_np == 1, day_np + 6, 180)).astype(np.float32)
+    days_to_ny = np.where(month_np == 12, 31 - day_np, np.where(month_np == 1, day_np, 180)).astype(np.float32)
+
+    # --- Speed Proxy ---
+    speed_proxy = np.where(pair_prior > 0, h_dist / (pair_prior / 3600.0 + 1e-6), 0.0)
 
     # --- Weather features ---
     if weather_df is not None:
@@ -282,6 +283,10 @@ def engineer_features(
         wind_speed_kmh = np.full(n, 10.0, dtype=np.float32)
         visibility_km = np.full(n, 16.0, dtype=np.float32)
         is_raining = np.zeros(n, dtype=np.int8)
+
+    # --- Interactions ---
+    rain_x_airport = (is_raining * is_airport).astype(np.float32)
+    rain_x_dist = (is_raining * h_dist).astype(np.float32)
 
     out = pd.DataFrame(
         {
@@ -311,11 +316,20 @@ def engineer_features(
             "minute_of_day": minute_of_day,
             "is_morning_rush": is_morning_rush,
             "is_evening_rush": is_evening_rush,
+            "pu_bor": pu_bor,
+            "do_bor": do_bor,
+            "is_cross_borough": is_cross,
+            "is_airport": is_airport,
+            "days_to_christmas": days_to_xmas,
+            "days_to_newyear": days_to_ny,
+            "speed_proxy": speed_proxy,
             "temp_c": temp_c,
             "precip_mm": precip_mm,
             "wind_speed_kmh": wind_speed_kmh,
             "visibility_km": visibility_km,
             "is_raining": is_raining,
+            "rain_x_airport": rain_x_airport,
+            "rain_x_dist": rain_x_dist,
         }
     )
     return out[FEATURE_ORDER]
@@ -416,7 +430,7 @@ def main() -> None:
     print(f"\nDev MAE: {mae:.1f} seconds")
 
     bundle = {
-        "version": 3,
+        "version": 6,
         "xgb": model,
         "pair_median": pair_median,
         "pair_cnt": pair_cnt,

@@ -62,8 +62,90 @@ def _bearing(lat1, lng1, lat2, lng2):
     x = np.cos(lat1) * np.sin(lat2) - np.sin(lat1) * np.cos(lat2) * np.cos(lng_delta_rad)
     return np.degrees(np.arctan2(y, x))
 
+# --- Bundle from `baseline-copy.py` (version 6: Refined Single-Model XGBoost) -
+if isinstance(_RAW, dict) and _RAW.get("version") == 6:
+    _MODEL = _RAW["xgb"]
+    _PAIR_MED = _RAW["pair_median"]
+    _PAIR_CNT = _RAW["pair_cnt"]
+    _PICKUP_MED = _RAW["pickup_median"]
+    _DROPOFF_MED = _RAW["dropoff_median"]
+    _PAIR_HOUR_MED = _RAW["pair_hour_median"]
+    _ZONE_LAT = _RAW["zone_lat"]
+    _ZONE_LON = _RAW["zone_lon"]
+    _FEAT_ORDER = _RAW["feature_order"]
+    _GLOBAL_MED = _RAW["global_median"]
+    _SMOOTHING_W = 50
+
+    if hasattr(_MODEL, "get_booster"):
+        _MODEL.get_booster().feature_names = None
+
+    _BOR = {}
+    try:
+        from pathlib import Path as _P
+        _zl = __import__("pandas").read_csv(_P(__file__).parent / "data" / "zone_lookup.csv")
+        for _, _r in _zl.iterrows():
+            _BOR[int(_r["LocationID"])] = {"Manhattan":0,"Brooklyn":1,"Queens":2,
+                "Bronx":3,"Staten Island":4,"EWR":5}.get(str(_r["Borough"]).strip(), 6)
+    except Exception: pass
+
+    def predict(request: dict) -> float:
+        ts = datetime.fromisoformat(request["requested_at"])
+        pu, do = int(request["pickup_zone"]), int(request["dropoff_zone"])
+        hour, minute, dow = ts.hour, ts.minute, ts.weekday()
+        month, day = ts.month, ts.day
+        pax = int(request["passenger_count"])
+        doy = float(ts.timetuple().tm_yday)
+        mod = float(hour*60 + minute)
+
+        pm = float(_PAIR_MED[pu, do]); pc = int(_PAIR_CNT[pu, do])
+        pup = float(_PICKUP_MED[pu]); dop = float(_DROPOFF_MED[do])
+        has = pc > 0 and not np.isnan(pm)
+        pair_prior = pm if has else pup
+        pair_smoothed = (pc*pm + _SMOOTHING_W*pup)/(pc+_SMOOTHING_W) if has else pup
+        hbin = hour // 3
+        phm = float(_PAIR_HOUR_MED[pu, do, hbin])
+        pair_hour_prior = phm if not np.isnan(phm) else pair_prior
+
+        pu_lat, pu_lon = float(_ZONE_LAT[pu]), float(_ZONE_LON[pu])
+        do_lat, do_lon = float(_ZONE_LAT[do]), float(_ZONE_LON[do])
+        h_dist = _haversine(pu_lat, pu_lon, do_lat, do_lon)
+        m_dist = h_dist * 1.2 # Manhattan approx
+        bear = _bearing(pu_lat, pu_lon, do_lat, do_lon)
+
+        pu_bor, do_bor = _BOR.get(pu, 6), _BOR.get(do, 6)
+        is_hol = 1.0 if (month, day) in _HOLIDAYS else 0.0
+        is_hol_p = 1.0 if (month==12 and day>=22) or (month==1 and day<=2) else 0.0
+        days_xmas = abs(day-25) if month==12 else (day+6 if month==1 else 180)
+        days_ny = (31-day) if month==12 else (day if month==1 else 180)
+        is_mr = 1.0 if dow<5 and 7<=hour<=10 else 0.0
+        is_er = 1.0 if dow<5 and 16<=hour<=19 else 0.0
+        speed = h_dist / (pair_prior/3600.0 + 1e-6) if pair_prior > 0 else 0.0
+
+        import pandas as _pd
+        x = _pd.DataFrame([{
+            "pickup_zone": pu, "dropoff_zone": do, "hour": hour, "dow": dow, "month": month,
+            "passenger_count": pax, "is_weekend": 1.0 if dow>=5 else 0.0,
+            "hour_sin": np.sin(2*np.pi*hour/24.0), "hour_cos": np.cos(2*np.pi*hour/24.0),
+            "dow_sin": np.sin(2*np.pi*dow/7.0), "dow_cos": np.cos(2*np.pi*dow/7.0),
+            "pair_prior_sec": pair_prior, "pair_prior_smoothed": pair_smoothed,
+            "log1p_pair_count": np.log1p(pc) if has else 0.0,
+            "pickup_prior_sec": pup, "dropoff_prior_sec": dop,
+            "pair_hour_prior_sec": pair_hour_prior,
+            "haversine_dist": h_dist, "manhattan_dist": m_dist, "bearing": bear,
+            "is_holiday": is_hol, "is_holiday_period": is_hol_p,
+            "day_of_year": doy, "minute_of_day": mod,
+            "is_morning_rush": is_mr, "is_evening_rush": is_er,
+            "pu_bor": float(pu_bor), "do_bor": float(do_bor), "is_cross_borough": 1.0 if pu_bor!=do_bor else 0.0,
+            "is_airport": 1.0 if pu in (1,132,138) or do in (1,132,138) else 0.0,
+            "days_to_christmas": float(days_xmas), "days_to_newyear": float(days_ny),
+            "speed_proxy": float(speed),
+            "temp_c": 15.0, "precip_mm": 0.0, "wind_speed_kmh": 10.0, "visibility_km": 16.0, "is_raining": 0.0,
+            "rain_x_airport": 0.0, "rain_x_dist": 0.0,
+        }])
+        return float(_MODEL.predict(x[_FEAT_ORDER])[0])
+
 # --- Bundle from `train_v5_stack.py` (version 5: XGB+LGB+CAT Stack) ----------
-if isinstance(_RAW, dict) and _RAW.get("version") == 5:
+elif isinstance(_RAW, dict) and _RAW.get("version") == 5:
     _XGB = _RAW["xgb_model"]
     _LGB = _RAW["lgb_model"]
     _CAT = _RAW["cat_model"]
