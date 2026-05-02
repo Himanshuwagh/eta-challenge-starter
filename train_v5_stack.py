@@ -21,6 +21,25 @@ import lightgbm as lgb
 from catboost import CatBoostRegressor
 from sklearn.linear_model import Ridge
 from sklearn.model_selection import KFold
+from joblib import Parallel, delayed
+
+def check_gpu():
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "cuda"
+    except ImportError:
+        pass
+    try:
+        import xgboost as xgb
+        xgb.XGBRegressor(tree_method='gpu_hist').get_booster()
+        return "cuda"
+    except:
+        pass
+    return "cpu"
+
+USE_GPU = check_gpu() == "cuda"
+print(f"Detected Device: {'GPU' if USE_GPU else 'CPU'}")
 
 DATA_DIR = Path(__file__).parent / "data"
 MODEL_PATH = Path(os.environ.get("ETA_MODEL_PATH", Path(__file__).parent / "model.pkl"))
@@ -292,14 +311,23 @@ def main():
     # ── Model 1: XGBoost (Huber loss) ─────────────────────────────────────
     print("\n══ Model 1: XGBoost ══")
     t0 = time.time()
-    xgb_model = xgb.XGBRegressor(
-        n_estimators=4000, max_depth=10, learning_rate=0.03,
-        min_child_weight=5, subsample=0.8, colsample_bytree=0.7,
-        reg_lambda=2.0, reg_alpha=0.1, gamma=0.1,
-        tree_method="hist", n_jobs=-1, random_state=42,
-        objective="reg:pseudohubererror", huber_slope=500,
-        early_stopping_rounds=100,
-    )
+    # ── Model 1: XGBoost ──────────────────────────────────────────────────
+    print("\n══ Model 1: XGBoost ══")
+    t0 = time.time()
+    xgb_params = {
+        "n_estimators": 4000, "max_depth": 10, "learning_rate": 0.03,
+        "min_child_weight": 5, "subsample": 0.8, "colsample_bytree": 0.7,
+        "reg_lambda": 2.0, "reg_alpha": 0.1, "gamma": 0.1,
+        "random_state": 42,
+        "objective": "reg:pseudohubererror", "huber_slope": 500,
+        "early_stopping_rounds": 100,
+    }
+    if USE_GPU:
+        xgb_params.update({"tree_method": "gpu_hist", "predictor": "gpu_predictor"})
+    else:
+        xgb_params.update({"tree_method": "hist", "n_jobs": -1})
+
+    xgb_model = xgb.XGBRegressor(**xgb_params)
     xgb_model.fit(X_tr, y_tr, eval_set=[(X_dev, y_dev)], verbose=False)
     xgb_pred = xgb_model.predict(X_dev)
     xgb_mae = float(np.mean(np.abs(xgb_pred - y_dev)))
@@ -310,17 +338,20 @@ def main():
     # ── Model 2: LightGBM ────────────────────────────────────────────────
     print("\n══ Model 2: LightGBM ══")
     t0 = time.time()
-    lgb_train = lgb.Dataset(X_tr, y_tr)
-    lgb_dev = lgb.Dataset(X_dev, y_dev, reference=lgb_train)
     lgb_params = {
         "objective": "huber", "alpha": 500,
         "num_leaves": 255, "max_depth": -1,
         "learning_rate": 0.03, "n_estimators": 4000,
         "min_child_samples": 20, "subsample": 0.8,
         "colsample_bytree": 0.7, "reg_lambda": 2.0,
-        "reg_alpha": 0.1, "n_jobs": -1, "random_state": 43,
+        "reg_alpha": 0.1, "random_state": 43,
         "verbose": -1,
     }
+    if USE_GPU:
+        lgb_params.update({"device": "gpu", "gpu_use_dp": False})
+    else:
+        lgb_params.update({"n_jobs": -1})
+
     lgb_model = lgb.LGBMRegressor(**lgb_params)
     lgb_model.fit(X_tr, y_tr, eval_set=[(X_dev, y_dev)],
                   callbacks=[lgb.early_stopping(100, verbose=False), lgb.log_evaluation(0)])
@@ -331,22 +362,26 @@ def main():
     # ── Model 3: CatBoost ────────────────────────────────────────────────
     print("\n══ Model 3: CatBoost ══")
     t0 = time.time()
-    # Build DataFrames with int cat columns for CatBoost
     cat_cols = [FEATURE_NAMES[i] for i in CAT_INDICES]
     X_tr_df = pd.DataFrame(X_tr, columns=FEATURE_NAMES)
     X_dev_df = pd.DataFrame(X_dev, columns=FEATURE_NAMES)
     for c in cat_cols:
         X_tr_df[c] = X_tr_df[c].astype(int)
         X_dev_df[c] = X_dev_df[c].astype(int)
-    cat_model = CatBoostRegressor(
-        iterations=2000, depth=6, learning_rate=0.08,
-        l2_leaf_reg=3.0, random_seed=44,
-        loss_function="MAE",
-        eval_metric="MAE",
-        early_stopping_rounds=80, verbose=200,
-        cat_features=cat_cols,
-        thread_count=-1,
-    )
+
+    cat_params = {
+        "iterations": 2000, "depth": 6, "learning_rate": 0.08,
+        "l2_leaf_reg": 3.0, "random_seed": 44,
+        "loss_function": "MAE", "eval_metric": "MAE",
+        "early_stopping_rounds": 80, "verbose": 200,
+        "cat_features": cat_cols,
+    }
+    if USE_GPU:
+        cat_params.update({"task_type": "GPU", "devices": "0"})
+    else:
+        cat_params.update({"thread_count": -1})
+
+    cat_model = CatBoostRegressor(**cat_params)
     cat_model.fit(X_tr_df, y_tr, eval_set=(X_dev_df, y_dev))
     cat_pred = cat_model.predict(X_dev_df)
     cat_mae = float(np.mean(np.abs(cat_pred - y_dev)))
