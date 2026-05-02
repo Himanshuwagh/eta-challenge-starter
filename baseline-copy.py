@@ -25,6 +25,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import xgboost as xgb
+from tqdm import tqdm
 
 DATA_DIR = Path(__file__).parent / "data"
 MODEL_PATH = Path(os.environ.get("ETA_MODEL_PATH", Path(__file__).parent / "model.pkl"))
@@ -453,6 +454,18 @@ def main() -> None:
     else:
         xgb_params.update({"tree_method": "hist", "n_jobs": -1})
 
+    class TqdmCallback(xgb.callback.TrainingCallback):
+        def __init__(self, total):
+            self.pbar = tqdm(total=total, desc="Boosting")
+        def after_iteration(self, model, epoch, evals_log):
+            self.pbar.update(1)
+            if evals_log and "validation_0" in evals_log:
+                # show latest metric in progress bar
+                metric_name = list(evals_log["validation_0"].keys())[0]
+                val = evals_log["validation_0"][metric_name][-1]
+                self.pbar.set_postfix({metric_name: f"{val:.1f}"})
+            return False
+
     model = xgb.XGBRegressor(**xgb_params)
     t1 = time.time()
     model.fit(
@@ -460,6 +473,7 @@ def main() -> None:
         y_train,
         eval_set=[(X_dev, y_dev)],
         verbose=False,
+        callbacks=[TqdmCallback(xgb_params["n_estimators"])]
     )
     print(f"  trained in {time.time() - t1:.0f}s (best_iteration={model.best_iteration})")
 
