@@ -12,10 +12,22 @@ from pathlib import Path
 
 import numpy as np
 
+# Custom unpickler: models saved from __main__ (train_deep.py / Colab)
+# store classes as __main__.ETANet. Redirect to train_deep module.
+class _Unpickler(pickle.Unpickler):
+    def find_class(self, module, name):
+        if name == "ETANet":
+            try:
+                import train_deep
+                return getattr(train_deep, name)
+            except (ImportError, AttributeError):
+                pass
+        return super().find_class(module, name)
+
 _MODEL_PATH = Path(__file__).parent / "model.pkl"
 
 with open(_MODEL_PATH, "rb") as _f:
-    _RAW = pickle.load(_f)
+    _RAW = _Unpickler(_f).load()
 
 # --- US Federal Holidays + key NYC dates for 2023-2024 ---
 _HOLIDAYS = {
@@ -50,9 +62,104 @@ def _bearing(lat1, lng1, lat2, lng2):
     x = np.cos(lat1) * np.sin(lat2) - np.sin(lat1) * np.cos(lat2) * np.cos(lng_delta_rad)
     return np.degrees(np.arctan2(y, x))
 
+# --- Bundle from `train_v5_stack.py` (version 5: XGB+LGB+CAT Stack) ----------
+if isinstance(_RAW, dict) and _RAW.get("version") == 5:
+    _XGB = _RAW["xgb_model"]
+    _LGB = _RAW["lgb_model"]
+    _CAT = _RAW["cat_model"]
+    _W = _RAW["ensemble_weights"]  # (w_xgb, w_lgb, w_cat)
+    _PAIR_MED = _RAW["pair_median"]
+    _PAIR_CNT = _RAW["pair_cnt"]
+    _PICKUP_MED = _RAW["pickup_median"]
+    _DROPOFF_MED = _RAW["dropoff_median"]
+    _PAIR_HOUR_MED = _RAW["pair_hour_median"]
+    _PAIR_DOW_MED = _RAW["pair_dow_median"]
+    _ZONE_LAT = _RAW["zone_lat"]
+    _ZONE_LON = _RAW["zone_lon"]
+    _SMOOTHING_W = 50
+
+    if hasattr(_XGB, "get_booster"):
+        _XGB.get_booster().feature_names = None
+
+    # Borough lookup
+    _BOR = {}
+    try:
+        from pathlib import Path as _P
+        _zl = __import__("pandas").read_csv(_P(__file__).parent / "data" / "zone_lookup.csv")
+        for _, _r in _zl.iterrows():
+            _BOR[int(_r["LocationID"])] = {"Manhattan":0,"Brooklyn":1,"Queens":2,
+                "Bronx":3,"Staten Island":4,"EWR":5}.get(str(_r["Borough"]).strip(), 6)
+    except Exception:
+        pass
+
+    def predict(request: dict) -> float:
+        ts = datetime.fromisoformat(request["requested_at"])
+        pu = int(request["pickup_zone"])
+        do = int(request["dropoff_zone"])
+        hour, minute, dow = ts.hour, ts.minute, ts.weekday()
+        month, day, pax = ts.month, ts.day, int(request["passenger_count"])
+        doy = float(ts.timetuple().tm_yday)
+        woy = ts.isocalendar()[1]
+
+        pm = float(_PAIR_MED[pu, do]); pc = int(_PAIR_CNT[pu, do])
+        pup = float(_PICKUP_MED[pu]); dop = float(_DROPOFF_MED[do])
+        has = pc > 0 and not np.isnan(pm)
+        pair_prior = pm if has else pup
+        pair_smoothed = (pc*pm + _SMOOTHING_W*pup)/(pc+_SMOOTHING_W) if has else pup
+        log1p_pc = float(np.log1p(pc)) if has else 0.0
+        hbin = hour // 3
+        phm = float(_PAIR_HOUR_MED[pu, do, hbin])
+        pair_hour_prior = phm if not np.isnan(phm) else pair_prior
+        pdm = float(_PAIR_DOW_MED[pu, do, dow])
+        pair_dow_prior = pdm if not np.isnan(pdm) else pair_prior
+
+        pu_lat, pu_lon = float(_ZONE_LAT[pu]), float(_ZONE_LON[pu])
+        do_lat, do_lon = float(_ZONE_LAT[do]), float(_ZONE_LON[do])
+        h_dist = _haversine(pu_lat, pu_lon, do_lat, do_lon)
+        m_dist = _manhattan(pu_lat, pu_lon, do_lat, do_lon)
+        bear = _bearing(pu_lat, pu_lon, do_lat, do_lon)
+
+        pu_bor = _BOR.get(pu, 6); do_bor = _BOR.get(do, 6)
+        is_cross = 1.0 if pu_bor != do_bor else 0.0
+        is_airport = 1.0 if pu in (1,132,138) or do in (1,132,138) else 0.0
+        is_hol = 1.0 if (month, day) in _HOLIDAYS else 0.0
+        is_xmas = 1.0 if (month==12 and day>=22) or (month==1 and day<=2) else 0.0
+        days_xmas = abs(day-25) if month==12 else (day+6 if month==1 else 180)
+        days_ny = (31-day) if month==12 else (day if month==1 else 180)
+        is_wd = dow < 5
+        is_mr = 1.0 if is_wd and 7<=hour<=10 else 0.0
+        is_er = 1.0 if is_wd and 16<=hour<=19 else 0.0
+        min_of_day = float(hour*60+minute)
+        two_pi_h = 2*np.pi*hour/24.0
+        two_pi_d = 2*np.pi*dow/7.0
+        two_pi_w = 2*np.pi*woy/52.0
+        speed_proxy = h_dist / (pair_prior/3600.0 + 1e-6) if pair_prior > 0 else 0.0
+
+        x = np.array([[
+            pu, do, hour, dow, month, float(pax), 1.0 if dow>=5 else 0.0,
+            np.sin(two_pi_h), np.cos(two_pi_h),
+            np.sin(two_pi_d), np.cos(two_pi_d),
+            np.sin(two_pi_w), np.cos(two_pi_w),
+            pair_prior, pair_smoothed, log1p_pc, pup, dop,
+            pair_hour_prior, pair_dow_prior,
+            h_dist, m_dist, bear,
+            is_hol, is_xmas, float(days_xmas), float(days_ny),
+            doy, min_of_day, is_mr, is_er,
+            float(pu_bor), float(do_bor), is_cross, is_airport,
+            float(speed_proxy),
+            15.0, 0.0, 60.0, 10.0, 16.0, 0.0,  # weather defaults
+            0.0, 0.0,  # rain interactions
+            float(woy),
+        ]], dtype=np.float32)
+
+        p1 = float(_XGB.predict(x)[0])
+        p2 = float(_LGB.predict(x)[0])
+        p3 = float(_CAT.predict(x)[0])
+        return float(_W[0]*p1 + _W[1]*p2 + _W[2]*p3)
 
 # --- Bundle from `train_deep.py` (version 4: NN + XGBoost Ensemble) ----------
-if isinstance(_RAW, dict) and _RAW.get("version") == 4:
+elif isinstance(_RAW, dict) and _RAW.get("version") == 4:
+
     import torch
 
     _NN_MODEL = _RAW["nn_model"]
