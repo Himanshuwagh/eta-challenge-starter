@@ -52,6 +52,10 @@ Used **Gemini 3-Flash & Claude 3.5 Sonnet** to:
 ## Reproduction
 
 ```bash
+# 0.
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+
 # 1. Setup & Data
 python data/download_data.py
 python extract_coords.py
