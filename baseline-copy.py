@@ -466,14 +466,13 @@ def main() -> None:
                 self.pbar.set_postfix({metric_name: f"{val:.1f}"})
             return False
 
-    model = xgb.XGBRegressor(**xgb_params)
+    model = xgb.XGBRegressor(**xgb_params, callbacks=[TqdmCallback(xgb_params["n_estimators"])])
     t1 = time.time()
     model.fit(
         X_train,
         y_train,
         eval_set=[(X_dev, y_dev)],
         verbose=False,
-        callbacks=[TqdmCallback(xgb_params["n_estimators"])]
     )
     print(f"  trained in {time.time() - t1:.0f}s (best_iteration={model.best_iteration})")
 
