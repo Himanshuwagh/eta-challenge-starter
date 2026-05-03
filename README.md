@@ -42,7 +42,7 @@ Instead of over-complicating the model architecture, this submission focuses on 
 
 ## AI Tooling 
 
-Used **Gemini 3-Flash & Claude 3.5 Sonnet** to:
+Used **Codex & Claude models** to:
 - Generate vectorized NumPy implementations for geospatial rotations.
 - Debug shared-memory deadlocks in high-memory environments.
 - Automate distribution analysis for the holiday domain-shift.
