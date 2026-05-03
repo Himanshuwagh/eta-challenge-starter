@@ -4,7 +4,7 @@
 
 ---
 
-## 🚀 Performance Summary
+## Performance Summary
 
 | Model | Architecture | Dev MAE | Improvement |
 |-------|--------------|---------|-------------|
@@ -13,7 +13,7 @@
 
 ---
 
-## 🏗️ Core Innovations
+## Core Innovations
 
 Instead of over-complicating the model architecture, this submission focuses on high-signal feature engineering and data quality.
 
@@ -32,7 +32,7 @@ Instead of over-complicating the model architecture, this submission focuses on 
 
 ---
 
-## 📉 What Didn't Work (Dead Ends)
+## What Didn't Work (Dead Ends)
 
 1.  **Deep Learning (Entity Embeddings)**: While technically interesting (v4), the NN architecture required significantly more memory and didn't outperform the GBDT on tabular data.
 2.  **Model Stacking**: Ensembling XGBoost with LightGBM and CatBoost (v5) added ~500MB to the image size and 2x inference latency for only a negligible (<1s) gain in MAE.
@@ -40,7 +40,7 @@ Instead of over-complicating the model architecture, this submission focuses on 
 
 ---
 
-## 🤖 AI Tooling (Antigravity)
+## AI Tooling (Antigravity)
 
 Used **Gemini 3-Flash & Claude 3.5 Sonnet** to:
 - Generate vectorized NumPy implementations for geospatial rotations.
@@ -49,7 +49,7 @@ Used **Gemini 3-Flash & Claude 3.5 Sonnet** to:
 
 ---
 
-## 🛠️ Reproduction
+## Reproduction
 
 ```bash
 # 1. Setup & Data
@@ -63,7 +63,7 @@ python baseline.py
 python grade.py
 ```
 
-## 📦 Deployment
+## Deployment
 
 The submission is fully self-contained in a Docker image:
 - **Image Size**: ~2.1 GB (Python 3.11-slim + XGBoost)
