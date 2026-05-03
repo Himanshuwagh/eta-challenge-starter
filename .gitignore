@@ -20,3 +20,5 @@ data/sample_1M.parquet
 # Shapefile data
 data/taxi_zones.zip
 data/taxi_zones/
+# Local CatBoost logs
+catboost_info/
