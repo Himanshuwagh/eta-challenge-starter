@@ -474,6 +474,9 @@ def main() -> None:
         eval_set=[(X_dev, y_dev)],
         verbose=False,
     )
+    # Clear callbacks to avoid pickling errors (tqdm objects cannot be pickled)
+    model.set_params(callbacks=None)
+    
     print(f"  trained in {time.time() - t1:.0f}s (best_iteration={model.best_iteration})")
 
     if hasattr(model, "get_booster"):
