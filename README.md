@@ -59,6 +59,9 @@ python extract_coords.py
 # 2. Train (Uses GPU if available)
 python baseline.py
 
+# Optional: Fast iteration (1% sample)
+# ETA_SAMPLE_FRAC=0.01 python baseline.py
+
 # 3. Local Evaluation
 python grade.py
 ```
