@@ -11,7 +11,8 @@
 | v1 (Baseline) | XGBoost, 6 raw features | ~351.0s |
 | v3 | XGBoost, 31 engineered features | 260.5s |
 | v4 | Entity Embedding NN + XGBoost Ensemble | ~250s |
-| **v5** | **XGBoost + LightGBM + CatBoost Stacking** | **~262.4s** |
+| v5 | XGBoost + LightGBM + CatBoost Stacking | ~262.4s |
+| **v6** | **Refined Single-Model XGBoost (Final)** | **258.2s** |
 
 ---
 
@@ -37,18 +38,18 @@ Transformed zone IDs from arbitrary integers into a spatially-aware system:
 ### Phase 4: Multi-GBDT Stacking (v5)
 An attempt to ensemble XGBoost, LightGBM, and CatBoost with a Ridge meta-learner.
 - **Result:** XGB: 274.5s, LGB: 269.6s, CAT: 260.5s, Stack: 262.4s.
-- **Observation:** Complex stacking yielded diminishing returns compared to the single-model `baseline-copy.py`. 
+- **Observation:** Complex stacking yielded diminishing returns compared to the single-model `baseline.py`. 
 - **Pivot:** Decided to fold v5's best feature engineering (boroughs, holiday proximity, speed proxy) back into the single-model XGBoost pipeline for a simpler, faster, and more maintainable production system.
 
-### Phase 5: Single-Model Refinement & Data Preprocessing (Current)
-Refining `baseline-copy.py` by folding in the best features from v5 and focusing heavily on **data preprocessing quality** rather than model complexity. We also optimized the scripts (`train_deep.py` and `baseline-copy.py`) for Colab's hardware constraints.
+### Phase 5: Single-Model Refinement (Final)
+Refining the pipeline by folding in the best features from v5 (boroughs, holiday proximity, speed proxies) back into a high-capacity XGBoost model. This achieved superior latency-to-accuracy trade-offs and simplified the production environment. We optimized the training scripts for Colab's hardware and resolved shared-memory bottlenecks.
 
 | Innovation | Rationale |
 |-----------|-----------|
 | **Rotated Manhattan Distance** | The NYC street grid is rotated ~29° from true North. Standard Manhattan distance assumes an N/S grid. Rotating coordinates by 29° before calculation significantly improves correlation with actual driving paths. |
 | **Aggregate Target Clipping** | Extreme outliers (e.g., a trip taking 5 hours because the meter was left running) severely skew the `pair_median` prior. We now clip training durations to the 1st-99th percentile (60s to ~4000s) *before* computing historical aggregates. |
 | **High-Resolution Time Bins** | Increased the resolution of `pair_hour_median` from 3-hour chunks to 1-hour chunks to better capture the sharp spikes of morning/evening rush hour (especially potent when training on 100% data). |
-| **Colab GPU Acceleration** | Added automatic GPU detection to `baseline-copy.py` and the XGBoost phase of `train_deep.py` (`tree_method='gpu_hist'`), allowing fast training on 50M+ rows. |
+| **Colab GPU Acceleration** | Added automatic GPU detection to `baseline.py` and the XGBoost phase of `train_deep.py` (`tree_method='gpu_hist'`), allowing fast training on 50M+ rows. |
 | **Colab DataLoader Deadlock Fix** | Fixed a silent hanging issue in `train_deep.py` caused by PyTorch's `DataLoader` exhausting Colab's `/dev/shm` shared memory when `num_workers > 0`. |
 | **Borough & Airport Features** | Cross-borough trips and airport trips (JFK/LGA/EWR) have fundamentally different traffic dynamics and volatility. |
 | **Holiday Proximity Features** | Replaced boolean holiday flags with continuous `days_to_christmas` and `days_to_newyear` metrics. |
@@ -77,10 +78,9 @@ Used **Antigravity (Gemini & Claude)** as pair programmer:
 
 ## 🔮 Remaining Experiments
 
-1.  **Full data training:** All experiments used 5-20% of 37M rows
-2.  **Out-of-fold stacking:** Proper K-fold OOF predictions for meta-learner
-3.  **Residual modeling:** Train correction model on base model errors
-4.  **FT-Transformer:** Self-attention across tabular features
+1.  **Out-of-fold stacking:** Proper K-fold OOF predictions for meta-learner
+2.  **Residual modeling:** Train correction model on base model errors
+3.  **FT-Transformer:** Self-attention across tabular features
 
 ---
 
@@ -93,11 +93,11 @@ python data/download_data.py
 # 2. Extract geospatial coordinates (requires geopandas)
 python extract_coords.py
 
-# 3a. Train v3 — XGBoost baseline (~5 min on 20% data)
-ETA_SAMPLE_FRAC=0.2 python baseline-copy.py
+# 3a. Train v6 — Final Refined XGBoost (~15 min on 100% data)
+python baseline.py
 
 # 3b. Train v4 — Entity Embedding NN + XGBoost (~30 min on 20% data)
-ETA_SAMPLE_FRAC=0.2 python train_deep.py
+python train_deep.py
 
 # 3c. Train v5 — Multi-GBDT Stacking (~45 min on full data)
 python train_v5_stack.py
